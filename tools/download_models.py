@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import requests
 
-RVC_DOWNLOAD_LINK = "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/"
+RVC_DOWNLOAD_LINK = "https://hf-mirror.com/lj1995/VoiceConversionWebUI/resolve/main/"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
