@@ -963,32 +963,24 @@ def generate_training_data_task(
             import os
             OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
             OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
+            OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
+            OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
 
-            oss_config = oss.config.load_default()
-            oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
-                OSS_ACCESS_KEY_ID,
-                OSS_ACCESS_KEY_SECRET
+            # 创建 OSS 配置
+            oss_config = oss.config(
+                region=OSS_REGION,
+                access_key_id=OSS_ACCESS_KEY_ID,
+                access_key_secret=OSS_ACCESS_KEY_SECRET
             )
-            oss_region = "cn-beijing"
-            oss_endpoint = "oss-cn-beijing.aliyuncs.com"
-            oss_bucket = "998555"
-
-            oss_config.region = oss_region
-            oss_config.endpoint = oss_endpoint
-
-            oss_client = oss.Client(oss_config)
+            
+            bucket = oss.Bucket(oss_config, OSS_BUCKET)
 
             # 上传处理后的音频
             oss_key = f"temp_audio/{uid}/processed_audio.wav"
             with open(processed_path, 'rb') as f:
-                oss_client.put_object(
-                    oss.PutObjectRequest(
-                        bucket=oss_bucket,
-                        key=oss_key,
-                        body=f.read()
-                    ))
+                bucket.put_object(oss_key, f)
 
-            processed_audio_url = f"https://{oss_bucket}.{oss_endpoint}/{oss_key}"
+            processed_audio_url = f"https://{OSS_BUCKET}.oss-{OSS_REGION}.aliyuncs.com/{oss_key}"
             logger.info(f"[Task {uid}] 音频已上传到 OSS: {processed_audio_url}")
 
         except Exception as e:
@@ -1946,77 +1938,29 @@ def convert_url(request: RvcConvertRequest):
         import os
         OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
         OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
+        OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
+        OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
 
-        oss_config = oss.config.load_default()
-        oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
-            OSS_ACCESS_KEY_ID,
-            OSS_ACCESS_KEY_SECRET
+        # 创建 OSS 配置
+        oss_config = oss.config(
+            region=OSS_REGION,
+            access_key_id=OSS_ACCESS_KEY_ID,
+            access_key_secret=OSS_ACCESS_KEY_SECRET
         )
-
-        # 从请求参数或环境变量读取OSS配置
-        oss_region = request.oss_region or os.environ.get("OSS_REGION", "cn-beijing")
-        oss_endpoint = request.oss_endpoint or os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
-        oss_bucket = request.oss_bucket or os.environ.get("OSS_BUCKET", "998555")
-
-        oss_config.region = oss_region
-        oss_config.endpoint = oss_endpoint
         
-        oss_client = oss.Client(oss_config)
+        bucket = oss.Bucket(oss_config, OSS_BUCKET)
         
         # 生成OSS key
         oss_key = f"rvc_output/{os.path.basename(final_output_path)}"
         
-        logger.info(f"上传到OSS: bucket={oss_bucket}, key={oss_key}")
+        logger.info(f"上传到OSS: bucket={OSS_BUCKET}, key={oss_key}")
         
-        # 分片上传
-        file_size = os.path.getsize(final_output_path)
-        part_size = 5 * 1024 * 1024  # 每个分片5MB
-        part_number = 1
-        upload_parts = []
-        offset = 0
-        
-        # 初始化分片上传
-        initiate_result = oss_client.initiate_multipart_upload(
-            oss.InitiateMultipartUploadRequest(
-                bucket=oss_bucket,
-                key=oss_key
-            ))
-        upload_id = initiate_result.upload_id
-        
+        # 直接上传（小文件）
         with open(final_output_path, 'rb') as f:
-            while offset < file_size:
-                current_part_size = min(part_size, file_size - offset)
-                f.seek(offset)
-                part_data = f.read(current_part_size)
-                
-                part_result = oss_client.upload_part(
-                    oss.UploadPartRequest(
-                        bucket=oss_bucket,
-                        key=oss_key,
-                        upload_id=upload_id,
-                        part_number=part_number,
-                        body=part_data
-                    ))
-                
-                upload_parts.append(oss.UploadPart(
-                    part_number=part_number,
-                    etag=part_result.etag
-                ))
-                
-                offset += current_part_size
-                part_number += 1
+            bucket.put_object(oss_key, f)
         
-        # 完成分片上传
-        upload_parts.sort(key=lambda p: p.part_number)
-        oss_client.complete_multipart_upload(
-            oss.CompleteMultipartUploadRequest(
-                bucket=oss_bucket,
-                key=oss_key,
-                upload_id=upload_id,
-                complete_multipart_upload=oss.CompleteMultipartUpload(parts=upload_parts)
-            ))
-        
-        oss_url = f"https://{oss_bucket}.{oss_endpoint}/{oss_key}"
+        # 生成公网 URL
+        oss_url = f"https://{OSS_BUCKET}.oss-{OSS_REGION}.aliyuncs.com/{oss_key}"
         logger.info(f"上传成功: {oss_url}")
         
         # ==================== 5. 清理本地文件 ====================
