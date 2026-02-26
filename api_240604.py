@@ -159,8 +159,182 @@ def get_task_status(uid: str) -> dict:
 
     return result
 
+
+def get_user_training_tasks(user_id: str, limit: int = 10) -> list:
+    """获取用户的所有训练数据生成任务"""
+    sql = """
+    SELECT uid, user_id, audio_url, voice_prefix, target_duration_min, output_dir,
+           voice_id, status, total_texts, successful_count, failed_count,
+           estimated_duration_min, error_message, created_at, updated_at, completed_at
+    FROM rvc_training_tasks
+    WHERE user_id = %s
+    ORDER BY created_at DESC
+    LIMIT %s
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(sql, (user_id, limit))
+            results = cursor.fetchall()
+
+    for result in results:
+        for key in ['created_at', 'updated_at', 'completed_at']:
+            if result.get(key):
+                result[key] = result[key].strftime('%Y-%m-%d %H:%M:%S')
+
+    return results
+
+
+def get_user_model_train_tasks(user_id: str, limit: int = 10) -> list:
+    """获取用户的所有模型训练任务"""
+    sql = """
+    SELECT uid, user_id, model_name, data_dir, sample_rate, version, epochs, batch_size, gpu,
+           status, current_epoch, total_epochs, loss_g, loss_d, model_path, error_message,
+           created_at, updated_at, completed_at
+    FROM rvc_model_train_tasks
+    WHERE user_id = %s
+    ORDER BY created_at DESC
+    LIMIT %s
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(sql, (user_id, limit))
+            results = cursor.fetchall()
+
+    for result in results:
+        for key in ['created_at', 'updated_at', 'completed_at']:
+            if result.get(key):
+                result[key] = result[key].strftime('%Y-%m-%d %H:%M:%S')
+
+    return results
+
+
 # 启动时初始化数据库表
 init_training_task_table()
+
+
+# =============================================
+# 模型训练任务数据库操作
+# =============================================
+
+# 模型训练任务状态
+MODEL_TRAIN_STATUS = {
+    "PENDING": "pending",        # 等待处理
+    "PREPROCESSING": "preprocessing",  # 预处理中
+    "EXTRACTING": "extracting",   # 特征提取中
+    "TRAINING": "training",       # 训练中
+    "COMPLETED": "completed",     # 完成
+    "FAILED": "failed"            # 失败
+}
+
+def init_model_train_table():
+    """初始化模型训练任务表"""
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS rvc_model_train_tasks (
+        uid VARCHAR(64) PRIMARY KEY COMMENT '任务唯一ID',
+        user_id VARCHAR(64) COMMENT '用户ID',
+        model_name VARCHAR(64) COMMENT '模型名称',
+        data_dir VARCHAR(256) COMMENT '训练数据目录',
+        sample_rate INT DEFAULT 48000 COMMENT '采样率',
+        version VARCHAR(8) DEFAULT 'v2' COMMENT '版本',
+        epochs INT DEFAULT 100 COMMENT '训练轮数',
+        batch_size INT DEFAULT 4 COMMENT '批次大小',
+        gpu VARCHAR(16) DEFAULT '0' COMMENT 'GPU编号',
+        status VARCHAR(32) DEFAULT 'pending' COMMENT '任务状态',
+        current_epoch INT DEFAULT 0 COMMENT '当前轮数',
+        total_epochs INT DEFAULT 0 COMMENT '总轮数',
+        loss_g FLOAT DEFAULT 0 COMMENT '生成器损失',
+        loss_d FLOAT DEFAULT 0 COMMENT '判别器损失',
+        model_path VARCHAR(256) COMMENT '模型文件路径',
+        error_message TEXT COMMENT '错误信息',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        completed_at DATETIME NULL COMMENT '完成时间',
+        INDEX idx_user_id (user_id),
+        INDEX idx_model_name (model_name),
+        INDEX idx_status (status),
+        INDEX idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RVC模型训练任务表';
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(create_table_sql)
+            conn.commit()
+        logger.info("模型训练任务表初始化完成")
+    except Exception as e:
+        logger.warning(f"初始化模型训练任务表失败: {e}")
+
+
+def create_model_train_task(uid: str, user_id: str, model_name: str, data_dir: str,
+                             sample_rate: int, version: str, epochs: int,
+                             batch_size: int, gpu: str) -> dict:
+    """创建模型训练任务记录"""
+    sql = """
+    INSERT INTO rvc_model_train_tasks
+    (uid, user_id, model_name, data_dir, sample_rate, version, epochs, batch_size, gpu, status)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (uid, user_id, model_name, data_dir, sample_rate,
+                                version, epochs, batch_size, gpu, MODEL_TRAIN_STATUS["PENDING"]))
+        conn.commit()
+
+    return {
+        "uid": uid,
+        "status": MODEL_TRAIN_STATUS["PENDING"]
+    }
+
+
+def update_model_train_status(uid: str, status: str, **kwargs):
+    """更新模型训练任务状态"""
+    allowed_fields = ["current_epoch", "total_epochs", "loss_g", "loss_d", "model_path", "error_message"]
+
+    set_clause = ["status = %s", "updated_at = NOW()"]
+    values = [status]
+
+    for field, value in kwargs.items():
+        if field in allowed_fields and value is not None:
+            set_clause.append(f"{field} = %s")
+            values.append(value)
+
+    if status == MODEL_TRAIN_STATUS["COMPLETED"] or status == MODEL_TRAIN_STATUS["FAILED"]:
+        set_clause.append("completed_at = NOW()")
+
+    values.append(uid)
+    sql = f"UPDATE rvc_model_train_tasks SET {', '.join(set_clause)} WHERE uid = %s"
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, values)
+        conn.commit()
+
+
+def get_model_train_status(uid: str) -> dict:
+    """获取模型训练任务状态"""
+    sql = """
+    SELECT uid, user_id, model_name, data_dir, sample_rate, version, epochs, batch_size, gpu,
+           status, current_epoch, total_epochs, loss_g, loss_d, model_path, error_message,
+           created_at, updated_at, completed_at
+    FROM rvc_model_train_tasks
+    WHERE uid = %s
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(sql, (uid,))
+            result = cursor.fetchone()
+
+    if result:
+        # 转换日期时间为字符串
+        for key in ['created_at', 'updated_at', 'completed_at']:
+            if result.get(key):
+                result[key] = result[key].strftime('%Y-%m-%d %H:%M:%S')
+
+    return result
+
+
+# 初始化模型训练任务表
+init_model_train_table()
 
 
 # =============================================
@@ -506,7 +680,19 @@ class GenerateTrainingDataRequest(BaseModel):
     audio_url: str  # 参考音频URL (公网可访问)
     voice_prefix: str = "trainvoice"  # 音色前缀 (仅数字和小写字母，小于10个字符)
     target_duration_min: int = 15  # 目标时长 (分钟)，默认15分钟
-    output_dir: str = "training_data_generated"  # 输出目录
+    # output_dir 不再需要用户指定，自动生成
+
+
+class TrainModelRequest(BaseModel):
+    """训练模型请求"""
+    user_id: str = ""  # 用户ID
+    model_name: str  # 模型名称 (如 "my_voice")
+    data_dir: str  # 训练数据目录 (包含 wav 和 txt 文件)
+    sample_rate: int = 48000  # 采样率: 32000, 40000, 48000
+    version: str = "v2"  # 版本: v1 或 v2
+    epochs: int = 100  # 训练轮数
+    batch_size: int = 4  # 批次大小
+    gpu: str = "0"  # GPU编号
 
 class Harvest(Process):
     def __init__(self, inp_q, opt_q):
@@ -844,6 +1030,257 @@ def generate_training_data_task(
     )
 
     logger.info(f"[Task {uid}] 任务完成!")
+
+
+def run_training_task(
+    uid: str,
+    user_id: str,
+    model_name: str,
+    data_dir: str,
+    sample_rate: int = 48000,
+    version: str = "v2",
+    epochs: int = 100,
+    batch_size: int = 4,
+    gpu: str = "0"
+):
+    """
+    后台任务：训练RVC模型
+
+    流程:
+    1. 预处理数据 (切片、重采样)
+    2. 提取特征 (Hubert + F0)
+    3. 训练模型
+
+    参数:
+        uid: 任务唯一ID
+        user_id: 用户ID
+        model_name: 模型名称
+        data_dir: 训练数据目录
+        sample_rate: 采样率
+        version: 版本 (v1/v2)
+        epochs: 训练轮数
+        batch_size: 批次大小
+        gpu: GPU编号
+    """
+    import subprocess
+    import shutil
+
+    logger.info(f"[Train Task {uid}] 开始训练模型: {model_name}")
+
+    # 验证数据目录
+    if not os.path.exists(data_dir):
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message=f"数据目录不存在: {data_dir}")
+        return
+
+    # 检查数据目录中是否有音频文件
+    wav_files = [f for f in os.listdir(data_dir) if f.endswith('.wav')]
+    if len(wav_files) == 0:
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message="数据目录中没有音频文件")
+        return
+
+    logger.info(f"[Train Task {uid}] 找到 {len(wav_files)} 个音频文件")
+
+    # 创建实验目录
+    exp_dir = os.path.join("logs", model_name)
+    os.makedirs(exp_dir, exist_ok=True)
+
+    # 保存训练数据链接
+    try:
+        # 创建 filelist.txt
+        filelist_path = os.path.join(exp_dir, "filelist.txt")
+        with open(filelist_path, "w", encoding="utf-8") as f:
+            for wav_file in wav_files:
+                wav_path = os.path.join(data_dir, wav_file)
+                txt_file = wav_file.replace(".wav", ".txt")
+                txt_path = os.path.join(data_dir, txt_file)
+
+                # 尝试读取对应的文本
+                text = ""
+                if os.path.exists(txt_path):
+                    with open(txt_path, "r", encoding="utf-8") as tf:
+                        text = tf.read().strip()
+
+                if text:
+                    f.write(f"{wav_path}|{text}\n")
+                else:
+                    f.write(f"{wav_path}\n")
+
+        logger.info(f"[Train Task {uid}] 已创建 filelist.txt")
+    except Exception as e:
+        logger.error(f"[Train Task {uid}] 创建 filelist 失败: {e}")
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message=f"创建filelist失败: {str(e)}")
+        return
+
+    # ===== 步骤1: 预处理 =====
+    logger.info(f"[Train Task {uid}] 步骤1: 预处理数据...")
+    update_model_train_status(uid, MODEL_TRAIN_STATUS["PREPROCESSING"])
+
+    try:
+        # 调用预处理脚本
+        # python infer/modules/train/preprocess.py <data_dir> <sr> <n_p> <exp_dir> <noparallel> <per>
+        preprocess_cmd = [
+            sys.executable,
+            "infer/modules/train/preprocess.py",
+            data_dir,
+            str(sample_rate),
+            "3.7",
+            exp_dir,
+            "False",
+            "3.7"
+        ]
+
+        logger.info(f"[Train Task {uid}] 执行预处理: {' '.join(preprocess_cmd)}")
+        result = subprocess.run(preprocess_cmd, capture_output=True, text=True, timeout=3600)
+        if result.returncode != 0:
+            logger.error(f"[Train Task {uid}] 预处理失败: {result.stderr}")
+            update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                    error_message=f"预处理失败: {result.stderr[:500]}")
+            return
+        logger.info(f"[Train Task {uid}] 预处理完成")
+    except Exception as e:
+        logger.error(f"[Train Task {uid}] 预处理异常: {e}")
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message=f"预处理异常: {str(e)}")
+        return
+
+    # ===== 步骤2: 提取特征 =====
+    logger.info(f"[Train Task {uid}] 步骤2: 提取特征...")
+    update_model_train_status(uid, MODEL_TRAIN_STATUS["EXTRACTING"])
+
+    try:
+        # 调用特征提取脚本
+        # python infer/modules/train/extract_feature_print.py <device> <n_part> <i_part> <exp_dir> <version> <is_half>
+        extract_cmd = [
+            sys.executable,
+            "infer/modules/train/extract_feature_print.py",
+            gpu,
+            "1",
+            "0",
+            exp_dir,
+            version,
+            "True"  # is_half
+        ]
+
+        logger.info(f"[Train Task {uid}] 执行特征提取: {' '.join(extract_cmd)}")
+        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=7200)
+        if result.returncode != 0:
+            logger.error(f"[Train Task {uid}] 特征提取失败: {result.stderr}")
+            update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                    error_message=f"特征提取失败: {result.stderr[:500]}")
+            return
+        logger.info(f"[Train Task {uid}] 特征提取完成")
+    except Exception as e:
+        logger.error(f"[Train Task {uid}] 特征提取异常: {e}")
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message=f"特征提取异常: {str(e)}")
+        return
+
+    # ===== 步骤3: 训练模型 =====
+    logger.info(f"[Train Task {uid}] 步骤3: 开始训练...")
+    update_model_train_status(uid, MODEL_TRAIN_STATUS["TRAINING"], total_epochs=epochs)
+
+    try:
+        # 复制配置文件到实验目录
+        config_src = f"configs/{version}/{sample_rate//1000}k.json"
+        config_dst = os.path.join(exp_dir, "config.json")
+
+        if os.path.exists(config_src):
+            shutil.copy(config_src, config_dst)
+            logger.info(f"[Train Task {uid}] 已复制配置文件")
+
+        # 调用训练脚本
+        # python infer/modules/train/train.py -e <exp_name> -g <gpu> -pg <pretrainG> -pd <pretrainD>
+        train_cmd = [
+            sys.executable,
+            "infer/modules/train/train.py",
+            "-e", model_name,
+            "-g", gpu,
+            "-pg", "",  # 可选：预训练模型
+            "-pd", ""
+        ]
+
+        logger.info(f"[Train Task {uid}] 开始训练模型: {' '.join(train_cmd)}")
+
+        # 训练过程需要较长时间，使用子进程监控
+        process = subprocess.Popen(train_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        current_epoch = 0
+        loss_g = 0.0
+        loss_d = 0.0
+
+        # 监控训练输出
+        while True:
+            # 检查进程是否结束
+            retcode = process.poll()
+            if retcode is not None:
+                # 进程结束
+                if retcode == 0:
+                    logger.info(f"[Train Task {uid}] 训练完成!")
+                else:
+                    stderr = process.stderr.read() if process.stderr else ""
+                    logger.error(f"[Train Task {uid}] 训练失败: {stderr}")
+                    update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                            error_message=f"训练失败: {stderr[:500]}")
+                break
+
+            # 读取输出
+            try:
+                line = process.stdout.readline()
+                if line:
+                    # 解析训练输出，提取epoch信息
+                    # 示例输出: "Step: 100/1000 | Loss_G: 1.234 | Loss_D: 0.567"
+                    if "Step:" in line or "Epoch:" in line:
+                        logger.info(f"[Train Task {uid}] {line.strip()}")
+
+                        # 尝试提取epoch
+                        import re
+                        epoch_match = re.search(r'Epoch[:\s]+(\d+)', line)
+                        if epoch_match:
+                            current_epoch = int(epoch_match.group(1))
+                            update_model_train_status(uid, MODEL_TRAIN_STATUS["TRAINING"],
+                                                    current_epoch=current_epoch,
+                                                    loss_g=loss_g, loss_d=loss_d)
+
+                        # 尝试提取loss
+                        loss_g_match = re.search(r'Loss_G[:\s]+([\d.]+)', line)
+                        loss_d_match = re.search(r'Loss_D[:\s]+([\d.]+)', line)
+                        if loss_g_match:
+                            loss_g = float(loss_g_match.group(1))
+                        if loss_d_match:
+                            loss_d = float(loss_d_match.group(1))
+            except:
+                pass
+
+            time.sleep(1)
+
+        # 如果进程正常结束
+        if process.returncode == 0:
+            # 查找生成的模型文件
+            model_path = os.path.join(exp_dir, "G_latest.pth")
+            if os.path.exists(model_path):
+                # 复制到 weights 目录
+                weights_dir = "assets/weights"
+                os.makedirs(weights_dir, exist_ok=True)
+                final_model_path = os.path.join(weights_dir, f"{model_name}.pth")
+                shutil.copy(model_path, final_model_path)
+                logger.info(f"[Train Task {uid}] 模型已保存到: {final_model_path}")
+
+                update_model_train_status(uid, MODEL_TRAIN_STATUS["COMPLETED"],
+                                        current_epoch=epochs,
+                                        model_path=final_model_path)
+            else:
+                update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                        error_message="未找到生成的模型文件")
+
+    except Exception as e:
+        logger.error(f"[Train Task {uid}] 训练异常: {e}")
+        update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
+                                error_message=f"训练异常: {str(e)}")
+
+    logger.info(f"[Train Task {uid}] 训练任务结束")
 
 
 class AudioAPI:
@@ -1507,14 +1944,22 @@ def generate_training_db(request: GenerateTrainingDataRequest):
         audio_url: 参考音频URL (公网可访问)
         voice_prefix: 音色前缀 (仅数字和小写字母，小于10个字符)
         target_duration_min: 目标时长 (分钟)，默认15分钟
-        output_dir: 输出目录
 
     返回:
-        任务ID (uid)，可用于查询状态
+        任务ID (uid) 和 output_dir，可用于查询状态
     """
     try:
         logger.info(f"收到训练数据生成请求: audio_url={request.audio_url}")
         logger.info(f"参数: user_id={request.user_id}, voice_prefix={request.voice_prefix}, target={request.target_duration_min}min")
+
+        # 验证参数
+        if not request.audio_url:
+            raise HTTPException(status_code=400, detail="audio_url 不能为空")
+
+        # 生成唯一的 output_dir (基于 user_id 和 voice_prefix + 时间戳)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("training_data", request.user_id or "default",
+                                  f"{request.voice_prefix}_{timestamp}")
 
         # 生成任务ID
         uid = str(uuid.uuid4())
@@ -1526,7 +1971,7 @@ def generate_training_db(request: GenerateTrainingDataRequest):
             audio_url=request.audio_url,
             voice_prefix=request.voice_prefix,
             target_duration_min=request.target_duration_min,
-            output_dir=request.output_dir
+            output_dir=output_dir
         )
 
         # 启动后台线程执行任务
@@ -1538,7 +1983,7 @@ def generate_training_db(request: GenerateTrainingDataRequest):
                 request.audio_url,
                 request.voice_prefix,
                 request.target_duration_min,
-                request.output_dir
+                output_dir
             )
         )
         thread.daemon = True
@@ -1548,6 +1993,7 @@ def generate_training_db(request: GenerateTrainingDataRequest):
 
         return {
             "uid": uid,
+            "output_dir": output_dir,
             "message": "任务已创建，请使用 uid 查询状态"
         }
 
@@ -1580,6 +2026,152 @@ def get_training_status(uid: str):
     except Exception as e:
         logger.error(f"查询任务状态失败: {e}")
         raise HTTPException(status_code=500, detail=f"查询任务状态失败: {str(e)}")
+
+
+@app.post("/train/model")
+def train_model(request: TrainModelRequest):
+    """
+    训练RVC模型 (异步)
+
+    流程:
+    1. 预处理数据 (切片、重采样)
+    2. 提取特征 (Hubert + F0)
+    3. 训练模型
+
+    参数:
+        user_id: 用户ID
+        model_name: 模型名称 (如 "my_voice")
+        data_dir: 训练数据目录 (包含 wav 和 txt 文件)
+        sample_rate: 采样率 (32000/40000/48000)
+        version: 版本 (v1 或 v2)
+        epochs: 训练轮数 (默认100)
+        batch_size: 批次大小 (默认4)
+        gpu: GPU编号 (默认0)
+
+    返回:
+        任务ID (uid)，可用于查询状态
+    """
+    try:
+        logger.info(f"收到模型训练请求: model_name={request.model_name}")
+        logger.info(f"参数: user_id={request.user_id}, data_dir={request.data_dir}")
+        logger.info(f"参数: sample_rate={request.sample_rate}, version={request.version}, epochs={request.epochs}")
+
+        # 验证参数
+        if not request.model_name:
+            raise HTTPException(status_code=400, detail="模型名称不能为空")
+
+        if not request.data_dir:
+            raise HTTPException(status_code=400, detail="训练数据目录不能为空")
+
+        if request.sample_rate not in [32000, 40000, 48000]:
+            raise HTTPException(status_code=400, detail="采样率必须是 32000, 40000 或 48000")
+
+        if request.version not in ["v1", "v2"]:
+            raise HTTPException(status_code=400, detail="版本必须是 v1 或 v2")
+
+        # 生成任务ID
+        uid = str(uuid.uuid4())
+
+        # 创建任务记录
+        create_model_train_task(
+            uid=uid,
+            user_id=request.user_id,
+            model_name=request.model_name,
+            data_dir=request.data_dir,
+            sample_rate=request.sample_rate,
+            version=request.version,
+            epochs=request.epochs,
+            batch_size=request.batch_size,
+            gpu=request.gpu
+        )
+
+        # 启动后台线程执行训练
+        thread = threading.Thread(
+            target=run_training_task,
+            args=(
+                uid,
+                request.user_id,
+                request.model_name,
+                request.data_dir,
+                request.sample_rate,
+                request.version,
+                request.epochs,
+                request.batch_size,
+                request.gpu
+            )
+        )
+        thread.daemon = True
+        thread.start()
+
+        logger.info(f"训练任务已创建: uid={uid}")
+
+        return {
+            "uid": uid,
+            "message": "训练任务已创建，请使用 uid 查询状态"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建训练任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建训练任务失败: {str(e)}")
+
+
+@app.get("/train/model/status/{uid}")
+def get_model_train_status_api(uid: str):
+    """
+    查询模型训练状态
+
+    参数:
+        uid: 任务ID
+
+    返回:
+        训练任务状态信息
+    """
+    try:
+        task = get_model_train_status(uid)
+
+        if not task:
+            raise HTTPException(status_code=404, detail=f"训练任务不存在: {uid}")
+
+        return task
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询训练状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"查询训练状态失败: {str(e)}")
+
+
+@app.get("/train/tasks/{user_id}")
+def get_user_tasks(user_id: str):
+    """
+    查询用户的所有任务
+
+    参数:
+        user_id: 用户ID
+
+    返回:
+        用户的所有生成任务和训练任务
+    """
+    try:
+        # 获取生成任务
+        generate_tasks = get_user_training_tasks(user_id)
+
+        # 获取训练任务
+        train_tasks = get_user_model_train_tasks(user_id)
+
+        return {
+            "user_id": user_id,
+            "generate_tasks": generate_tasks,
+            "train_tasks": train_tasks,
+            "generate_task_count": len(generate_tasks),
+            "train_task_count": len(train_tasks)
+        }
+
+    except Exception as e:
+        logger.error(f"查询用户任务失败: {e}")
+        raise HTTPException(status_code=500, detail=f"查询用户任务失败: {str(e)}")
 
 if __name__ == "__main__":
     if sys.platform == "win32":
