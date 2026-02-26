@@ -1410,25 +1410,43 @@ def run_training_task(
         logger.info(f"[Train Task {uid}] 开始训练模型: {' '.join(train_cmd)}")
 
         # 训练过程需要较长时间，使用子进程监控
-        process = subprocess.Popen(train_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # 确保在正确的工作目录下运行
+        process = subprocess.Popen(
+            train_cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True,
+            cwd=os.getcwd()  # 当前工作目录
+        )
 
         current_epoch = 0
         loss_g = 0.0
         loss_d = 0.0
+        
+        # 收集所有输出用于最终诊断
+        all_output = []
 
         # 监控训练输出
         while True:
             # 检查进程是否结束
             retcode = process.poll()
             if retcode is not None:
+                # 进程结束，读取剩余输出
+                remaining_stdout = process.stdout.read() if process.stdout else ""
+                remaining_stderr = process.stderr.read() if process.stderr else ""
+                
+                if remaining_stdout:
+                    logger.info(f"[Train Task {uid}] 训练输出:\n{remaining_stdout[:2000]}")
+                if remaining_stderr:
+                    logger.error(f"[Train Task {uid}] 训练错误:\n{remaining_stderr[:2000]}")
+                
                 # 进程结束
                 if retcode == 0:
                     logger.info(f"[Train Task {uid}] 训练完成!")
                 else:
-                    stderr = process.stderr.read() if process.stderr else ""
-                    logger.error(f"[Train Task {uid}] 训练失败: {stderr}")
+                    logger.error(f"[Train Task {uid}] 训练失败 (exit code: {retcode}): {remaining_stderr[:500]}")
                     update_model_train_status(uid, MODEL_TRAIN_STATUS["FAILED"],
-                                            error_message=f"训练失败: {stderr[:500]}")
+                                            error_message=f"训练失败 (exit code {retcode}): {remaining_stderr[:500]}")
                 break
 
             # 读取输出
@@ -1463,9 +1481,31 @@ def run_training_task(
 
         # 如果进程正常结束
         if process.returncode == 0:
-            # 查找生成的模型文件
-            model_path = os.path.join(exp_dir, "G_latest.pth")
-            if os.path.exists(model_path):
+            # 查找生成的模型文件（检查多个可能的位置）
+            possible_model_paths = [
+                os.path.join(exp_dir, "G_latest.pth"),
+                os.path.join(exp_dir, "G_0.pth"),
+                os.path.join(exp_dir, f"G_{epochs}.pth"),
+            ]
+            
+            model_path = None
+            for path in possible_model_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    logger.info(f"[Train Task {uid}] 找到模型文件: {path}")
+                    break
+            
+            # 如果还没找到，列出exp_dir目录下的所有文件
+            if not model_path and os.path.exists(exp_dir):
+                files = os.listdir(exp_dir)
+                logger.info(f"[Train Task {uid}] exp_dir内容: {files}")
+                for f in files:
+                    if f.endswith('.pth'):
+                        model_path = os.path.join(exp_dir, f)
+                        logger.info(f"[Train Task {uid}] 找到模型文件: {model_path}")
+                        break
+            
+            if model_path and os.path.exists(model_path):
                 # 复制到 weights 目录
                 weights_dir = "assets/weights"
                 os.makedirs(weights_dir, exist_ok=True)
