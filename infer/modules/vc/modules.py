@@ -97,7 +97,15 @@ class VC:
                 "",
                 "",
             )
-        person = f'{os.getenv("weight_root")}/{sid}'
+        # 处理模型路径 - 支持完整路径和相对路径
+        weight_root = os.getenv("weight_root", "assets/weights")
+        if os.path.isabs(sid) or sid.startswith("./") or sid.startswith("../"):
+            # sid 是绝对路径或相对路径
+            person = sid
+        else:
+            # sid 是模型名，需要拼接 weight_root
+            person = f'{weight_root}/{sid}'
+
         logger.info(f"Loading: {person}")
 
         self.cpt = torch.load(person, map_location="cpu")
