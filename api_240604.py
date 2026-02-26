@@ -1316,15 +1316,16 @@ def run_training_task(
     try:
         # 调用预处理脚本
         # python infer/modules/train/preprocess.py <data_dir> <sr> <n_p> <exp_dir> <noparallel> <per>
+        # n_p: 并行处理数量（整数）, per: 百分比（浮点数）
         preprocess_cmd = [
             sys.executable,
             "infer/modules/train/preprocess.py",
             data_dir,
             str(sample_rate),
-            "3.7",
+            "4",  # n_p: 并行进程数（整数）
             exp_dir,
             "False",
-            "3.7"
+            "0.8"  # per: 每条音频提取80%的内容
         ]
 
         logger.info(f"[Train Task {uid}] 执行预处理: {' '.join(preprocess_cmd)}")
