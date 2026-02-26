@@ -957,8 +957,8 @@ def generate_training_data_task(
         try:
             # 尝试上传到 OSS 获取可访问的 URL
             # 写死的 OSS 配置
-            OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # 替换为你的 AccessKeyId
-            OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # 替换为你的 AccessKeySecret
+            OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # AccessKeyId
+            OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # AccessKeySecret
 
             oss_config = oss.config.load_default()
             oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
@@ -1939,8 +1939,8 @@ def convert_url(request: RvcConvertRequest):
         
         # ==================== 4. 上传到阿里云OSS ====================
         # 写死的 OSS 配置
-        OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # 替换为你的 AccessKeyId
-        OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # 替换为你的 AccessKeySecret
+        OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # AccessKeyId
+        OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # AccessKeySecret
 
         oss_config = oss.config.load_default()
         oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
