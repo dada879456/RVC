@@ -956,11 +956,18 @@ def generate_training_data_task(
 
         try:
             # 尝试上传到 OSS 获取可访问的 URL
+            # 写死的 OSS 配置
+            OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # 替换为你的 AccessKeyId
+            OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # 替换为你的 AccessKeySecret
+
             oss_config = oss.config.load_default()
-            oss_config.credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
-            oss_region = os.environ.get("OSS_REGION", "cn-beijing")
-            oss_endpoint = os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
-            oss_bucket = os.environ.get("OSS_BUCKET", "998555")
+            oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
+                OSS_ACCESS_KEY_ID,
+                OSS_ACCESS_KEY_SECRET
+            )
+            oss_region = "cn-beijing"
+            oss_endpoint = "oss-cn-beijing.aliyuncs.com"
+            oss_bucket = "998555"
 
             oss_config.region = oss_region
             oss_config.endpoint = oss_endpoint
@@ -1931,14 +1938,21 @@ def convert_url(request: RvcConvertRequest):
             logger.info("音频混合完成")
         
         # ==================== 4. 上传到阿里云OSS ====================
+        # 写死的 OSS 配置
+        OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # 替换为你的 AccessKeyId
+        OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # 替换为你的 AccessKeySecret
+
         oss_config = oss.config.load_default()
-        oss_config.credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
-        
+        oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
+            OSS_ACCESS_KEY_ID,
+            OSS_ACCESS_KEY_SECRET
+        )
+
         # 从请求参数或环境变量读取OSS配置
-        oss_region = request.oss_region or os.environ.get("OSS_REGION", "cn-hangzhou")
-        oss_endpoint = request.oss_endpoint or os.environ.get("OSS_ENDPOINT", "oss-cn-hangzhou.aliyuncs.com")
-        oss_bucket = request.oss_bucket or os.environ.get("OSS_BUCKET", "your-bucket-name")
-        
+        oss_region = request.oss_region or os.environ.get("OSS_REGION", "cn-beijing")
+        oss_endpoint = request.oss_endpoint or os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+        oss_bucket = request.oss_bucket or os.environ.get("OSS_BUCKET", "998555")
+
         oss_config.region = oss_region
         oss_config.endpoint = oss_endpoint
         
