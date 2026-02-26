@@ -895,11 +895,11 @@ def generate_training_data_task(
         return
 
     # 设置 API Key
-    api_key = os.environ.get("DASHSCOPE_API_KEY")
+    api_key = os.environ.get("DASHSCOPE_API_KEY","sk-322570c89a1a42c68147cfabea6a8c3e")
     if not api_key:
         from dotenv import load_dotenv
         load_dotenv()
-        api_key = os.environ.get("DASHSCOPE_API_KEY")
+        api_key = os.environ.get("DASHSCOPE_API_KEY","sk-322570c89a1a42c68147cfabea6a8c3e")
 
     if not api_key:
         update_task_status(uid, TASK_STATUS["FAILED"], error_message="未配置 DASHSCOPE_API_KEY")
