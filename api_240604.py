@@ -1389,11 +1389,20 @@ def run_training_task(
 
         # 调用训练脚本
         # python infer/modules/train/train.py -e <exp_name> -g <gpu> -pg <pretrainG> -pd <pretrainD>
+        # 必需参数: -se, -te, -bs, -sr, -v, -f0, -l, -c
         train_cmd = [
             sys.executable,
             "infer/modules/train/train.py",
             "-e", model_name,
             "-g", gpu,
+            "-se", str(max(1, epochs // 5)),  # 每5个epoch保存一次
+            "-te", str(epochs),  # 总训练轮数
+            "-bs", str(batch_size),  # batch size
+            "-sr", str(sample_rate),  # 采样率
+            "-v", version,  # 版本 v1/v2
+            "-f0", "1",  # 是否使用f0
+            "-l", "1",  # 是否保存最新
+            "-c", "0",  # 是否缓存数据到GPU
             "-pg", "",  # 可选：预训练模型
             "-pd", ""
         ]
