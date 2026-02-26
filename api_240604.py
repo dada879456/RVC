@@ -956,9 +956,10 @@ def generate_training_data_task(
 
         try:
             # 尝试上传到 OSS 获取可访问的 URL
-            # 写死的 OSS 配置
-            OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # AccessKeyId
-            OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # AccessKeySecret
+            # 从环境变量读取 OSS 配置
+            import os
+            OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
+            OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
 
             oss_config = oss.config.load_default()
             oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
@@ -1938,9 +1939,10 @@ def convert_url(request: RvcConvertRequest):
             logger.info("音频混合完成")
         
         # ==================== 4. 上传到阿里云OSS ====================
-        # 写死的 OSS 配置
-        OSS_ACCESS_KEY_ID = "LTAI5tRzPKm1xcUuNd4BTmsz"  # AccessKeyId
-        OSS_ACCESS_KEY_SECRET = "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko"  # AccessKeySecret
+        # 从环境变量读取 OSS 配置
+        import os
+        OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
+        OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
 
         oss_config = oss.config.load_default()
         oss_config.credentials_provider = oss.credentials.AccessKeyCredentials(
