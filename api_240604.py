@@ -1282,25 +1282,41 @@ def run_training_task(
     os.makedirs(exp_dir, exist_ok=True)
 
     # 保存训练数据链接
+    # 无f0格式: path/wav|path/feature.npy|speaker_id
+    # 有f0格式: path/wav|path/feature.npy|path/f0.npy|path/f0nsf.npy|speaker_id
     try:
+        # 确定特征目录
+        feature_dir = os.path.join(exp_dir, "3_feature768")
+        gt_wavs_dir = os.path.join(exp_dir, "1_16k_wavs")
+        
+        # 如果1_16k_wavs不存在，尝试0_gt_wavs
+        if not os.path.exists(gt_wavs_dir):
+            gt_wavs_dir = os.path.join(exp_dir, "0_gt_wavs")
+        
         # 创建 filelist.txt
         filelist_path = os.path.join(exp_dir, "filelist.txt")
-        with open(filelist_path, "w", encoding="utf-8") as f:
-            for wav_file in wav_files:
-                wav_path = os.path.join(data_dir, wav_file)
-                txt_file = wav_file.replace(".wav", ".txt")
-                txt_path = os.path.join(data_dir, txt_file)
-
-                # 尝试读取对应的文本
-                text = ""
-                if os.path.exists(txt_path):
-                    with open(txt_path, "r", encoding="utf-8") as tf:
-                        text = tf.read().strip()
-
-                if text:
-                    f.write(f"{wav_path}|{text}\n")
-                else:
-                    f.write(f"{wav_path}\n")
+        
+        # 使用无f0格式 (3个字段)
+        if os.path.exists(feature_dir) and os.path.exists(gt_wavs_dir):
+            with open(filelist_path, "w", encoding="utf-8") as f:
+                for wav_file in sorted(wav_files):
+                    # 获取不带扩展名的文件名
+                    name = os.path.splitext(wav_file)[0]
+                    
+                    wav_path = os.path.join(gt_wavs_dir, wav_file)
+                    feature_path = os.path.join(feature_dir, f"{name}.npy")
+                    
+                    # 只添加特征文件存在的记录
+                    if os.path.exists(wav_path) and os.path.exists(feature_path):
+                        # 无f0格式：wav|feature|speaker_id
+                        f.write(f"{wav_path}|{feature_path}|0\n")
+        else:
+            # 如果特征目录不存在，使用简化格式
+            logger.warning(f"[Train Task {uid}] 特征目录不存在，使用简化格式")
+            with open(filelist_path, "w", encoding="utf-8") as f:
+                for wav_file in sorted(wav_files):
+                    wav_path = os.path.join(data_dir, wav_file)
+                    f.write(f"{wav_path}|0\n")
 
         logger.info(f"[Train Task {uid}] 已创建 filelist.txt")
     except Exception as e:
@@ -1400,7 +1416,7 @@ def run_training_task(
             "-bs", str(batch_size),  # batch size
             "-sr", str(sample_rate),  # 采样率
             "-v", version,  # 版本 v1/v2
-            "-f0", "1",  # 是否使用f0
+            "-f0", "0",  # 是否使用f0 (0=不使用，简化训练)
             "-l", "1",  # 是否保存最新
             "-c", "0",  # 是否缓存数据到GPU
             "-pg", "",  # 可选：预训练模型
