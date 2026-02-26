@@ -966,11 +966,16 @@ def generate_training_data_task(
             OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
             OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
 
+            # 使用 StaticCredentialsProvider 创建凭据
+            credentials = oss.credentials.StaticCredentialsProvider(
+                access_key_id=OSS_ACCESS_KEY_ID,
+                access_key_secret=OSS_ACCESS_KEY_SECRET
+            )
+            
             # 创建 OSS 配置
             oss_config = oss.config(
                 region=OSS_REGION,
-                access_key_id=OSS_ACCESS_KEY_ID,
-                access_key_secret=OSS_ACCESS_KEY_SECRET
+                credentials_provider=credentials
             )
             
             bucket = oss.Bucket(oss_config, OSS_BUCKET)
@@ -1942,10 +1947,14 @@ def convert_url(request: RvcConvertRequest):
         OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
 
         # 创建 OSS 配置
-        oss_config = oss.config(
-            region=OSS_REGION,
+        credentials = oss.credentials.StaticCredentialsProvider(
             access_key_id=OSS_ACCESS_KEY_ID,
             access_key_secret=OSS_ACCESS_KEY_SECRET
+        )
+        
+        oss_config = oss.config(
+            region=OSS_REGION,
+            credentials_provider=credentials
         )
         
         bucket = oss.Bucket(oss_config, OSS_BUCKET)
