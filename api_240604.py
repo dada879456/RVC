@@ -26,6 +26,10 @@ import pymysql
 from contextlib import contextmanager
 import uuid
 
+# Initialize the logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # =============================================
 # 数据库配置
 # =============================================
@@ -608,10 +612,6 @@ TRAINING_TEXTS_POOL = [
 
 # 每句话大约 3-5 秒，要达到 15-30 分钟需要 300-600 条
 # 这里提供 300 条，组合使用
-
-# Initialize the logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Define FastAPI app
 app = FastAPI()
