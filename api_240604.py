@@ -879,6 +879,9 @@ def generate_training_data_task(
     import dashscope
     from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
 
+    # 确保 os 模块可用
+    import os
+
     logger.info(f"[Task {uid}] 开始生成训练数据...")
 
     # 验证 audio_url
