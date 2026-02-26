@@ -909,6 +909,9 @@ def generate_training_data_task(
         return
 
     dashscope.api_key = api_key
+    
+    # 设置WebSocket API URL (北京地域)
+    dashscope.base_websocket_api_url = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
 
     logger.info(f"[Task {uid}] 参考音频: {audio_url}")
     logger.info(f"[Task {uid}] 音色前缀: {voice_prefix}")
@@ -930,11 +933,15 @@ def generate_training_data_task(
         response = requests.get(audio_url, timeout=120)
         if response.status_code != 200:
             raise Exception(f"下载音频失败: HTTP {response.status_code}")
+        
+        logger.info(f"[Task {uid}] 音频下载成功，保存原始音频...")
 
         # 保存原始音频
         original_path = f"{temp_audio_path}_original"
         with open(original_path, "wb") as f:
             f.write(response.content)
+        
+        logger.info(f"[Task {uid}] 原始音频已保存")
 
         # 检测并转换采样率
         logger.info(f"[Task {uid}] 检测音频采样率...")
@@ -959,39 +966,58 @@ def generate_training_data_task(
 
         try:
             # 尝试上传到 OSS 获取可访问的 URL
-            # 从环境变量读取 OSS 配置
+            # 使用阿里云OSS Python SDK V2
             import os
+            
             OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
             OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
             OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
             OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
+            OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
             
             # 设置环境变量供 SDK 使用
             os.environ["ALIBABA_CLOUD_ACCESS_KEY_ID"] = OSS_ACCESS_KEY_ID
             os.environ["ALIBABA_CLOUD_ACCESS_KEY_SECRET"] = OSS_ACCESS_KEY_SECRET
             
-            # 创建 OSS 配置 - 使用 load_default 并设置凭据提供者
-            oss_config = oss.config.load_default()
-            oss_config.credentials_provider = oss.credentials.StaticCredentialsProvider(
-                access_key_id=OSS_ACCESS_KEY_ID,
-                access_key_secret=OSS_ACCESS_KEY_SECRET
-            )
-            oss_config.region = OSS_REGION
+            # 使用官方SDK V2方式创建客户端
+            credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+            config = oss.config.load_default()
+            config.credentials_provider = credentials_provider
+            config.region = OSS_REGION
+            config.endpoint = OSS_ENDPOINT
             
-            bucket = oss.Bucket(oss_config, OSS_BUCKET)
-
-            # 上传处理后的音频
+            # 创建OSS客户端
+            client = oss.Client(config)
+            
+            # 生成OSS key
             oss_key = f"temp_audio/{uid}/processed_audio.wav"
+            
+            logger.info(f"[Task {uid}] 上传到OSS: bucket={OSS_BUCKET}, key={oss_key}")
+            
+            # 上传文件
             with open(processed_path, 'rb') as f:
-                bucket.put_object(oss_key, f)
-
-            processed_audio_url = f"https://{OSS_BUCKET}.oss-{OSS_REGION}.aliyuncs.com/{oss_key}"
+                client.put_object(
+                    oss.PutObjectRequest(
+                        bucket=OSS_BUCKET,
+                        key=oss_key,
+                        body=f
+                    ))
+            
+            # 生成公网访问URL
+            processed_audio_url = f"https://{OSS_BUCKET}.{OSS_ENDPOINT}/{oss_key}"
             logger.info(f"[Task {uid}] 音频已上传到 OSS: {processed_audio_url}")
+            
+            # 清理本地临时文件
+            try:
+                os.remove(processed_path)
+            except:
+                pass
 
         except Exception as e:
-            logger.warning(f"[Task {uid}] 上传OSS失败: {e}")
-            # 如果OSS上传失败，尝试使用本地文件（如果是本地路径）
-            processed_audio_url = processed_path
+            logger.error(f"[Task {uid}] 上传OSS失败: {e}")
+            # OSS上传失败是严重错误，不能继续执行
+            update_task_status(uid, TASK_STATUS["FAILED"], error_message=f"音频处理失败: OSS上传失败 - {str(e)}")
+            return
 
         # 清理临时文件
         try:
@@ -1011,49 +1037,103 @@ def generate_training_data_task(
     # ===== 步骤1: 复刻音色 =====
     logger.info(f"[Task {uid}] 步骤1: 开始复刻音色...")
     update_task_status(uid, TASK_STATUS["CLONING"])
-
+    
     service = VoiceEnrollmentService()
-
+    
+    # 检查是否已经克隆过相同音频的音色
+    existing_voice_id = None
     try:
-        voice_id = service.create_voice(
-            target_model="cosyvoice-v3-plus",
-            prefix=voice_prefix,
-            url=audio_url_for_clone
-        )
-        logger.info(f"[Task {uid}] 音色复刻请求已提交, Voice ID: {voice_id}")
+        # 列出已存在的音色
+        voices = service.list_voices()
+        logger.info(f"[Task {uid}] 已存在的音色数量: {len(voices)}")
+        
+        # 查找匹配的音色 (相同前缀)
+        for voice in voices:
+            voice_id = voice.get("voice_id", "")
+            # 格式: cosyvoice-v3-plus-{prefix}-{uuid}
+            if voice_id.startswith(f"cosyvoice-v3-plus-{voice_prefix}-"):
+                # 检查这个音色是否关联了相同的音频URL
+                # 这里我们假设如果前缀相同且之前成功克隆过，就可以复用
+                logger.info(f"[Task {uid}] 找到已存在的音色: {voice_id}")
+                existing_voice_id = voice_id
+                break
     except Exception as e:
-        logger.error(f"[Task {uid}] 音色复刻失败: {e}")
-        update_task_status(uid, TASK_STATUS["FAILED"], error_message=f"音色复刻失败: {str(e)}")
-        return
+        logger.warning(f"[Task {uid}] 查询已有音色失败: {e}")
+    
+    if existing_voice_id:
+        voice_id = existing_voice_id
+        logger.info(f"[Task {uid}] 使用已存在的音色: {voice_id}")
+    else:
+        try:
+            voice_id = service.create_voice(
+                target_model="cosyvoice-v3-plus",
+                prefix=voice_prefix,
+                url=audio_url_for_clone
+            )
+            logger.info(f"[Task {uid}] 音色复刻请求已提交, Voice ID: {voice_id}")
+        except Exception as e:
+            logger.error(f"[Task {uid}] 音色复刻失败: {e}")
+            update_task_status(uid, TASK_STATUS["FAILED"], error_message=f"音色复刻失败: {str(e)}")
+            return
 
-    # ===== 步骤2: 轮询等待音色就绪 =====
-    logger.info(f"[Task {uid}] 步骤2: 等待音色复刻完成...")
-
-    max_attempts = 60  # 最多等待 10 分钟
-    poll_interval = 10  # 每 10 秒查询一次
-
-    for attempt in range(max_attempts):
+    # ===== 步骤2: 轮询等待音色就绪 (如果是已存在的音色则检查状态) =====
+    if existing_voice_id:
+        logger.info(f"[Task {uid}] 使用已有音色: {voice_id}")
+        # 检查音色状态
         try:
             voice_info = service.query_voice(voice_id=voice_id)
             status = voice_info.get("status")
-            logger.info(f"[Task {uid}] 尝试 {attempt + 1}/{max_attempts}: 状态 = '{status}'")
-
-            if status == "OK":
-                logger.info(f"[Task {uid}] 音色复刻成功!")
-                break
-            elif status == "UNDEPLOYED":
-                raise RuntimeError(f"音色处理失败: {status}")
-            elif status in ["PROCESSING", "DEPLOYING"]:
-                time.sleep(poll_interval)
-            else:
-                logger.warning(f"[Task {uid}] 未知状态: {status}")
-                time.sleep(poll_interval)
+            logger.info(f"[Task {uid}] 已有音色状态: {status}")
+            if status != "OK":
+                logger.warning(f"[Task {uid}] 已有音色状态异常: {status}，需要等待部署...")
+                for attempt in range(max_attempts):
+                    try:
+                        voice_info = service.query_voice(voice_id=voice_id)
+                        status = voice_info.get("status")
+                        logger.info(f"[Task {uid}] 尝试 {attempt + 1}/{max_attempts}: 状态 = '{status}'")
+                        if status == "OK":
+                            logger.info(f"[Task {uid}] 音色部署成功!")
+                            break
+                        elif status == "UNDEPLOYED":
+                            raise RuntimeError(f"音色处理失败: {status}")
+                        elif status in ["PROCESSING", "DEPLOYING"]:
+                            time.sleep(poll_interval)
+                    except Exception as e:
+                        logger.warning(f"[Task {uid}] 查询失败: {e}")
+                        time.sleep(poll_interval)
+                else:
+                    update_task_status(uid, TASK_STATUS["FAILED"], error_message="已有音色部署超时")
+                    return
         except Exception as e:
-            logger.warning(f"[Task {uid}] 查询失败: {e}")
-            time.sleep(poll_interval)
+            logger.warning(f"[Task {uid}] 查询音色状态失败: {e}")
     else:
-        update_task_status(uid, TASK_STATUS["FAILED"], error_message="等待超时，音色尚未准备完成")
-        return
+        logger.info(f"[Task {uid}] 步骤2: 等待音色复刻完成...")
+
+        max_attempts = 60  # 最多等待 10 分钟
+        poll_interval = 10  # 每 10 秒查询一次
+
+        for attempt in range(max_attempts):
+            try:
+                voice_info = service.query_voice(voice_id=voice_id)
+                status = voice_info.get("status")
+                logger.info(f"[Task {uid}] 尝试 {attempt + 1}/{max_attempts}: 状态 = '{status}'")
+
+                if status == "OK":
+                    logger.info(f"[Task {uid}] 音色复刻成功!")
+                    break
+                elif status == "UNDEPLOYED":
+                    raise RuntimeError(f"音色处理失败: {status}")
+                elif status in ["PROCESSING", "DEPLOYING"]:
+                    time.sleep(poll_interval)
+                else:
+                    logger.warning(f"[Task {uid}] 未知状态: {status}")
+                    time.sleep(poll_interval)
+            except Exception as e:
+                logger.warning(f"[Task {uid}] 查询失败: {e}")
+                time.sleep(poll_interval)
+        else:
+            update_task_status(uid, TASK_STATUS["FAILED"], error_message="等待超时，音色尚未准备完成")
+            return
 
     # 更新 voice_id 到数据库
     update_task_status(uid, TASK_STATUS["GENERATING"], voice_id=voice_id)
@@ -1076,19 +1156,37 @@ def generate_training_data_task(
     logger.info(f"[Task {uid}] 将生成 {len(texts_to_generate)} 条文本")
     update_task_status(uid, TASK_STATUS["GENERATING"], total_texts=len(texts_to_generate))
 
-    synthesizer = SpeechSynthesizer(model="cosyvoice-v3-plus", voice=voice_id)
-
     successful_count = 0
     failed_count = 0
     total_duration = 0.0
 
     for i, text in enumerate(texts_to_generate):
+        
         output_file = os.path.join(output_dir, f"{i+1:04d}.wav")
         text_file = os.path.join(output_dir, f"{i+1:04d}.txt")
 
         try:
-            # 生成音频
-            audio_data = synthesizer.call(text)
+            # 每次创建新的synthesizer并重试
+            max_retries = 3
+            audio_data = None
+            for retry in range(max_retries):
+                try:
+                    # 重新创建synthesizer
+                    synthesizer = SpeechSynthesizer(model="cosyvoice-v3-plus", voice=voice_id)
+                    
+                    # 生成音频
+                    audio_data = synthesizer.call(text)
+                    break
+                except Exception as e:
+                    error_msg = str(e)
+                    if retry < max_retries - 1 and ("Connection" in error_msg or "closed" in error_msg):
+                        logger.warning(f"[Task {uid}] 连接断开，尝试重新连接 ({retry + 1}/{max_retries}): {error_msg}")
+                        time.sleep(2)
+                        continue
+                    raise
+            
+            if audio_data is None:
+                raise Exception("重试次数用尽，仍未成功生成")
 
             # 保存音频文件
             with open(output_file, "wb") as f:
@@ -1939,38 +2037,45 @@ def convert_url(request: RvcConvertRequest):
             logger.info("音频混合完成")
         
         # ==================== 4. 上传到阿里云OSS ====================
-        # 从环境变量读取 OSS 配置
+        # 使用阿里云OSS Python SDK V2
         import os
+        
         OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
         OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
         OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
         OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
-
+        OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+        
         # 设置环境变量供 SDK 使用
         os.environ["ALIBABA_CLOUD_ACCESS_KEY_ID"] = OSS_ACCESS_KEY_ID
         os.environ["ALIBABA_CLOUD_ACCESS_KEY_SECRET"] = OSS_ACCESS_KEY_SECRET
         
-        # 创建 OSS 配置 - 使用 load_default 并设置凭据提供者
-        oss_config = oss.config.load_default()
-        oss_config.credentials_provider = oss.credentials.StaticCredentialsProvider(
-            access_key_id=OSS_ACCESS_KEY_ID,
-            access_key_secret=OSS_ACCESS_KEY_SECRET
-        )
-        oss_config.region = OSS_REGION
+        # 使用官方SDK V2方式创建客户端
+        credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+        config = oss.config.load_default()
+        config.credentials_provider = credentials_provider
+        config.region = OSS_REGION
+        config.endpoint = OSS_ENDPOINT
         
-        bucket = oss.Bucket(oss_config, OSS_BUCKET)
+        # 创建OSS客户端
+        client = oss.Client(config)
         
         # 生成OSS key
         oss_key = f"rvc_output/{os.path.basename(final_output_path)}"
         
         logger.info(f"上传到OSS: bucket={OSS_BUCKET}, key={oss_key}")
         
-        # 直接上传（小文件）
+        # 上传文件
         with open(final_output_path, 'rb') as f:
-            bucket.put_object(oss_key, f)
+            client.put_object(
+                oss.PutObjectRequest(
+                    bucket=OSS_BUCKET,
+                    key=oss_key,
+                    body=f
+                ))
         
-        # 生成公网 URL
-        oss_url = f"https://{OSS_BUCKET}.oss-{OSS_REGION}.aliyuncs.com/{oss_key}"
+        # 生成公网访问URL
+        oss_url = f"https://{OSS_BUCKET}.{OSS_ENDPOINT}/{oss_key}"
         logger.info(f"上传成功: {oss_url}")
         
         # ==================== 5. 清理本地文件 ====================
