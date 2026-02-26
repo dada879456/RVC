@@ -965,12 +965,13 @@ def generate_training_data_task(
             OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
             OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
             OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
+            
+            # 设置环境变量供 SDK 使用
+            os.environ["ALIBABA_CLOUD_ACCESS_KEY_ID"] = OSS_ACCESS_KEY_ID
+            os.environ["ALIBABA_CLOUD_ACCESS_KEY_SECRET"] = OSS_ACCESS_KEY_SECRET
 
-            # 使用 StaticCredentialsProvider 创建凭据
-            credentials = oss.credentials.StaticCredentialsProvider(
-                access_key_id=OSS_ACCESS_KEY_ID,
-                access_key_secret=OSS_ACCESS_KEY_SECRET
-            )
+            # 使用环境变量凭据
+            credentials = oss.credentials.EnvironmentVariableCredentialsProvider()
             
             # 创建 OSS 配置
             oss_config = oss.config(
@@ -1946,11 +1947,12 @@ def convert_url(request: RvcConvertRequest):
         OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
         OSS_BUCKET = os.getenv("OSS_BUCKET", "998555")
 
-        # 创建 OSS 配置
-        credentials = oss.credentials.StaticCredentialsProvider(
-            access_key_id=OSS_ACCESS_KEY_ID,
-            access_key_secret=OSS_ACCESS_KEY_SECRET
-        )
+        # 设置环境变量供 SDK 使用
+        os.environ["ALIBABA_CLOUD_ACCESS_KEY_ID"] = OSS_ACCESS_KEY_ID
+        os.environ["ALIBABA_CLOUD_ACCESS_KEY_SECRET"] = OSS_ACCESS_KEY_SECRET
+        
+        # 使用环境变量凭据
+        credentials = oss.credentials.EnvironmentVariableCredentialsProvider()
         
         oss_config = oss.config(
             region=OSS_REGION,
