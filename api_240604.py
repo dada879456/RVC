@@ -895,11 +895,11 @@ def generate_training_data_task(
         return
 
     # 设置 API Key
-    api_key = os.environ.get("DASHSCOPE_API_KEY","sk-322570c89a1a42c68147cfabea6a8c3e")
+    api_key = os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         from dotenv import load_dotenv
         load_dotenv()
-        api_key = os.environ.get("DASHSCOPE_API_KEY","sk-322570c89a1a42c68147cfabea6a8c3e")
+        api_key = os.environ.get("DASHSCOPE_API_KEY")
 
     if not api_key:
         update_task_status(uid, TASK_STATUS["FAILED"], error_message="未配置 DASHSCOPE_API_KEY")
@@ -911,6 +911,95 @@ def generate_training_data_task(
     logger.info(f"[Task {uid}] 音色前缀: {voice_prefix}")
     logger.info(f"[Task {uid}] 目标时长: {target_duration_min} 分钟")
 
+    # ===== 步骤0: 下载并重采样音频 =====
+    logger.info(f"[Task {uid}] 步骤0: 下载并处理音频...")
+    try:
+        import tempfile
+        from pydub import AudioSegment
+        import subprocess
+
+        # 创建临时目录
+        temp_dir = tempfile.mkdtemp()
+        temp_audio_path = os.path.join(temp_dir, "input_audio")
+
+        # 下载音频
+        logger.info(f"[Task {uid}] 下载音频: {audio_url}")
+        response = requests.get(audio_url, timeout=120)
+        if response.status_code != 200:
+            raise Exception(f"下载音频失败: HTTP {response.status_code}")
+
+        # 保存原始音频
+        original_path = f"{temp_audio_path}_original"
+        with open(original_path, "wb") as f:
+            f.write(response.content)
+
+        # 检测并转换采样率
+        logger.info(f"[Task {uid}] 检测音频采样率...")
+        audio = AudioSegment.from_file(original_path)
+
+        original_sr = audio.frame_rate
+        logger.info(f"[Task {uid}] 原始采样率: {original_sr}Hz")
+
+        # 如果采样率低于 16kHz，进行重采样
+        if original_sr < 16000:
+            logger.info(f"[Task {uid}] 采样率低于 16kHz，进行重采样...")
+            audio = audio.set_frame_rate(16000)
+            logger.info(f"[Task {uid}] 重采样后: {audio.frame_rate}Hz")
+
+        # 保存处理后的音频
+        processed_path = f"{temp_audio_path}_processed.wav"
+        audio.export(processed_path, format="wav")
+
+        # 上传到临时可访问的URL（这里需要用户自己提供处理后的URL）
+        # 由于无法直接获取公网URL，我们使用 OSS 上传
+        processed_audio_url = None
+
+        try:
+            # 尝试上传到 OSS 获取可访问的 URL
+            oss_config = oss.config.load_default()
+            oss_config.credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+            oss_region = os.environ.get("OSS_REGION", "cn-beijing")
+            oss_endpoint = os.environ.get("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
+            oss_bucket = os.environ.get("OSS_BUCKET", "998555")
+
+            oss_config.region = oss_region
+            oss_config.endpoint = oss_endpoint
+
+            oss_client = oss.Client(oss_config)
+
+            # 上传处理后的音频
+            oss_key = f"temp_audio/{uid}/processed_audio.wav"
+            with open(processed_path, 'rb') as f:
+                oss_client.put_object(
+                    oss.PutObjectRequest(
+                        bucket=oss_bucket,
+                        key=oss_key,
+                        body=f.read()
+                    ))
+
+            processed_audio_url = f"https://{oss_bucket}.{oss_endpoint}/{oss_key}"
+            logger.info(f"[Task {uid}] 音频已上传到 OSS: {processed_audio_url}")
+
+        except Exception as e:
+            logger.warning(f"[Task {uid}] 上传OSS失败: {e}")
+            # 如果OSS上传失败，尝试使用本地文件（如果是本地路径）
+            processed_audio_url = processed_path
+
+        # 清理临时文件
+        try:
+            os.remove(original_path)
+        except:
+            pass
+
+        # 使用处理后的音频URL
+        audio_url_for_clone = processed_audio_url
+
+    except Exception as e:
+        logger.error(f"[Task {uid}] 音频处理失败: {e}")
+        # 如果处理失败，尝试使用原始URL
+        audio_url_for_clone = audio_url
+        logger.warning(f"[Task {uid}] 尝试使用原始音频URL: {audio_url}")
+
     # ===== 步骤1: 复刻音色 =====
     logger.info(f"[Task {uid}] 步骤1: 开始复刻音色...")
     update_task_status(uid, TASK_STATUS["CLONING"])
@@ -921,7 +1010,7 @@ def generate_training_data_task(
         voice_id = service.create_voice(
             target_model="cosyvoice-v3-plus",
             prefix=voice_prefix,
-            url=audio_url
+            url=audio_url_for_clone
         )
         logger.info(f"[Task {uid}] 音色复刻请求已提交, Voice ID: {voice_id}")
     except Exception as e:
