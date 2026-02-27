@@ -665,6 +665,7 @@ class RvcConvertRequest(BaseModel):
     input_url: str  # 音频URL
     model_name: str = "/home/RVC/assets/weights/lulu_e120_s23040.pth"  # 模型路径
     f0method: str = "rmvpe"  # 基频检测方法
+    pitch: int = 0        
     index_rate: float = 0.7  # 检索强度
     index_path: str = ""  # 可选：index文件路径
     mix_audio_url: str = ""  # 可选：混合音频URL（背景音乐）
@@ -2043,11 +2044,11 @@ def convert_url(request: RvcConvertRequest):
         vc = VC(config)
         vc.get_vc(request.model_name)
         
-        logger.info(f"开始转换: f0method={request.f0method}, index_rate={request.index_rate}")
+        logger.info(f"开始转换: f0method={request.f0method}, pitch={request.pitch}, index_rate={request.index_rate}")
         _, wav_opt = vc.vc_single(
             0,
             input_path,
-            0,  # f0up_key
+            request.pitch,  # f0up_key - 升降调（半音数）
             None,
             request.f0method,
             request.index_path if request.index_path else None,
