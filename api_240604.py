@@ -2104,8 +2104,6 @@ def convert_url(request: RvcConvertRequest):
         
         # ==================== 4. 上传到阿里云OSS ====================
         # 使用阿里云OSS Python SDK V2
-        import os
-        
         OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "LTAI5tRzPKm1xcUuNd4BTmsz")
         OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "h5MUAf1EGJ2ICEh6QgS55hyZjdxDko")
         OSS_REGION = os.getenv("OSS_REGION", "cn-beijing")
