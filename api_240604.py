@@ -663,7 +663,7 @@ class ConfigData(BaseModel):
 
 class RvcConvertRequest(BaseModel):
     input_url: str  # 音频URL
-    model_name: str = "/home/RVC/assets/weights/mi-mengbao.pth"  # 模型路径
+    model_name: str = "/home/RVC/assets/weights/lulu_e120_s23040.pth"  # 模型路径
     f0method: str = "rmvpe"  # 基频检测方法
     index_rate: float = 0.7  # 检索强度
     index_path: str = ""  # 可选：index文件路径
