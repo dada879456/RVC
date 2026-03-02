@@ -10,8 +10,15 @@ import sys
 import argparse
 import tempfile
 import subprocess
+import shutil
+import glob
 import numpy as np
 import soundfile as sf
+
+# 兼容新版本 numpy，避免 librosa 中使用已移除的 np.float 报错
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
+
 import librosa
 
 # 添加项目路径到 Python 路径
@@ -27,7 +34,8 @@ os.environ["weight_uvr5_root"] = weight_uvr5_root
 
 def run_ffmpeg(cmd):
     """运行 ffmpeg 命令"""
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVICE, stderr=subprocess.DEVICE)
+    # 使用 DEVNULL 静默 ffmpeg 输出，避免 AttributeError: subprocess.DEVICE
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def convert_audio(input_path, output_path, sr=44100):
@@ -67,57 +75,88 @@ def uvr5_dereverb(input_path, output_path, model_name="VR-DeEchoNormal"):
     print(f"  使用模型: {model_name}")
     print(f"  设备: {device}")
 
-    # 临时文件路径
-    temp_wav = input_path
+    # 临时工作目录，用来存放 UVR5 的中间输出（其 API 期望的是“目录”，不是最终文件路径）
+    work_root = tempfile.mkdtemp(prefix="uvr5_", dir=os.path.dirname(output_path))
+    vocal_root = os.path.join(work_root, "vocal")
+    others_root = os.path.join(work_root, "others")
 
-    # 检查是否需要格式转换
+    os.makedirs(vocal_root, exist_ok=True)
+    os.makedirs(others_root, exist_ok=True)
+
+    # 临时文件路径（保证 2 声道 44.1k）
+    temp_wav = input_path
     info = get_audio_info(input_path)
-    if info is None or info['channels'] != 2 or info['sample_rate'] != 44100:
+    if info is None or info["channels"] != 2 or info["sample_rate"] != 44100:
         print(f"  格式转换...")
-        temp_wav = os.path.join(tempfile.gettempdir(), "temp_uvr5.wav")
+        temp_wav = os.path.join(work_root, "temp_uvr5.wav")
         convert_audio(input_path, temp_wav)
 
-    # 选择模型
-    if model_name == "onnx_dereverb_By_FoxJoy":
-        pre_fun = MDXNetDereverb(15, device)
-        pre_fun.pred.prediction(
-            temp_wav,
-            output_path,
-            output_path.replace(".wav", "_others.wav"),
-            "wav"
-        )
-    else:
-        model_path = os.path.join(weight_uvr5_root, model_name + ".pth")
-
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"模型不存在: {model_path}")
-
-        if "DeEcho" in model_name:
-            func = AudioPreDeEcho
+    try:
+        # 选择模型并运行
+        if model_name == "onnx_dereverb_By_FoxJoy":
+            pre_fun = MDXNetDereverb(15, device)
+            # MDXNet 接口: (input, vocal_root, others_root, format)
+            pre_fun._path_audio_(temp_wav, vocal_root, others_root, "wav")
         else:
-            func = AudioPre
+            model_path = os.path.join(weight_uvr5_root, model_name + ".pth")
 
-        pre_fun = func(
-            agg=7,
-            model_path=model_path,
-            device=device,
-            is_half=is_half
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"模型不存在: {model_path}")
+
+            if "DeEcho" in model_name:
+                func = AudioPreDeEcho
+            else:
+                func = AudioPre
+
+            pre_fun = func(
+                agg=7,
+                model_path=model_path,
+                device=device,
+                is_half=is_half,
+            )
+
+            # VR 接口: (music_file, ins_root, vocal_root, format)
+            # 真实“人声”会被输出到 vocal_root 目录，文件名里会带 vocal_/instrument_ 等前缀
+            pre_fun._path_audio_(temp_wav, others_root, vocal_root, "wav")
+
+        # 从 vocal_root 中挑一条“人声”轨道作为最终输出
+        vocal_candidates = sorted(
+            glob.glob(os.path.join(vocal_root, "*.wav")), key=os.path.getsize, reverse=True
         )
+        if not vocal_candidates and os.path.isdir(others_root):
+            # 兜底：如果 vocal_root 里没有，就从 others_root 里选一条最大的
+            vocal_candidates = sorted(
+                glob.glob(os.path.join(others_root, "*.wav")),
+                key=os.path.getsize,
+                reverse=True,
+            )
 
-        # UVR5 输出人声(vocal)和伴奏(others)
-        # 对于熊猫叫声，我们要的是"人声"部分
-        pre_fun._path_audio_(
-            temp_wav,
-            output_path.replace(".wav", "_others.wav"),
-            output_path,
-            "wav"
-        )
+        if not vocal_candidates:
+            raise RuntimeError("未在 UVR5 输出目录中找到任何 wav 文件")
 
-    # 清理临时文件
-    if temp_wav != input_path and os.path.exists(temp_wav):
-        os.remove(temp_wav)
+        # 如果之前因错误逻辑在该路径创建了“同名目录”，先安全删除该目录
+        if os.path.isdir(output_path):
+            shutil.rmtree(output_path, ignore_errors=True)
 
-    print(f"  UVR5 处理完成")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        best_vocal = vocal_candidates[0]
+        # 覆盖已存在的同名文件
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        shutil.move(best_vocal, output_path)
+
+        print(f"  UVR5 处理完成")
+    finally:
+        # 清理临时文件和目录
+        try:
+            if temp_wav != input_path and os.path.exists(temp_wav):
+                os.remove(temp_wav)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(work_root, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def simple_dereverb(audio, sr):
@@ -177,11 +216,16 @@ def process_panda_audio(input_path, output_path, use_uvr5=True, model_name="VR-D
         except Exception as e:
             print(f"  UVR5 错误: {e}")
             print("  使用简单去混响...")
+            # 如果 output_path 不小心被建成了目录，这里也一并清理掉
+            if os.path.isdir(output_path):
+                shutil.rmtree(output_path, ignore_errors=True)
             audio_clean = simple_dereverb(audio, 44100)
             audio_clean = remove_noise_simple(audio_clean, 44100)
             sf.write(output_path, audio_clean, 44100)
     else:
         print("使用简单去混响...")
+        if os.path.isdir(output_path):
+            shutil.rmtree(output_path, ignore_errors=True)
         audio_clean = simple_dereverb(audio, 44100)
         audio_clean = remove_noise_simple(audio_clean, 44100)
         sf.write(output_path, audio_clean, 44100)

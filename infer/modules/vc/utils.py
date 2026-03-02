@@ -1,6 +1,12 @@
 import os
 
+import torch
 from fairseq import checkpoint_utils
+from fairseq.data.dictionary import Dictionary
+
+
+# Allow fairseq's Dictionary class for safe torch.load with weights_only=True (PyTorch >= 2.6)
+torch.serialization.add_safe_globals([Dictionary])
 
 
 def get_index_path_from_model(sid):

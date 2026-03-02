@@ -71,6 +71,7 @@ def init_training_task_table():
         voice_prefix VARCHAR(32) COMMENT '音色前缀',
         target_duration_min INT DEFAULT 15 COMMENT '目标时长(分钟)',
         output_dir VARCHAR(256) COMMENT '输出目录',
+        keep_sr TINYINT(1) DEFAULT 0 COMMENT '是否保持采样率',
         voice_id VARCHAR(128) COMMENT '阿里云音色ID',
         status VARCHAR(32) DEFAULT 'pending' COMMENT '任务状态',
         total_texts INT DEFAULT 0 COMMENT '总文本数',
@@ -97,17 +98,18 @@ def init_training_task_table():
 
 
 def create_training_task(uid: str, user_id: str, audio_url: str, voice_prefix: str,
-                         target_duration_min: int, output_dir: str) -> dict:
+                         target_duration_min: int, output_dir: str,
+                         keep_sr: bool = False) -> dict:
     """创建训练任务记录"""
     sql = """
     INSERT INTO rvc_training_tasks
-    (uid, user_id, audio_url, voice_prefix, target_duration_min, output_dir, status)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    (uid, user_id, audio_url, voice_prefix, target_duration_min, output_dir, keep_sr, status)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(sql, (uid, user_id, audio_url, voice_prefix,
-                                target_duration_min, output_dir, TASK_STATUS["PENDING"]))
+                                target_duration_min, output_dir, int(keep_sr), TASK_STATUS["PENDING"]))
         conn.commit()
 
     return {
@@ -681,6 +683,7 @@ class GenerateTrainingDataRequest(BaseModel):
     audio_url: str  # 参考音频URL (公网可访问)
     voice_prefix: str = "trainvoice"  # 音色前缀 (仅数字和小写字母，小于10个字符)
     target_duration_min: int = 15  # 目标时长 (分钟)，默认15分钟
+    keep_sr: bool = False  # 是否保持原始采样率（不对参考音频做重采样）
     # output_dir 不再需要用户指定，自动生成
 
 
@@ -859,7 +862,8 @@ def generate_training_data_task(
     audio_url: str,
     voice_prefix: str = "trainvoice",
     target_duration_min: int = 15,
-    output_dir: str = "training_data_generated"
+    output_dir: str = "training_data_generated",
+    keep_sr: bool = False,
 ):
     """
     后台任务：生成训练数据库
@@ -917,6 +921,7 @@ def generate_training_data_task(
     logger.info(f"[Task {uid}] 参考音频: {audio_url}")
     logger.info(f"[Task {uid}] 音色前缀: {voice_prefix}")
     logger.info(f"[Task {uid}] 目标时长: {target_duration_min} 分钟")
+    logger.info(f"[Task {uid}] 是否保持原始采样率: {keep_sr}")
 
     # ===== 步骤0: 下载并重采样音频 =====
     logger.info(f"[Task {uid}] 步骤0: 下载并处理音频...")
@@ -944,18 +949,22 @@ def generate_training_data_task(
         
         logger.info(f"[Task {uid}] 原始音频已保存")
 
-        # 检测并转换采样率
+        # 检测并根据需要转换采样率
         logger.info(f"[Task {uid}] 检测音频采样率...")
         audio = AudioSegment.from_file(original_path)
 
         original_sr = audio.frame_rate
         logger.info(f"[Task {uid}] 原始采样率: {original_sr}Hz")
 
-        # 如果采样率低于 16kHz，进行重采样
-        if original_sr < 16000:
-            logger.info(f"[Task {uid}] 采样率低于 16kHz，进行重采样...")
-            audio = audio.set_frame_rate(16000)
-            logger.info(f"[Task {uid}] 重采样后: {audio.frame_rate}Hz")
+        if keep_sr:
+            # 保持原始采样率，仅做格式转换
+            logger.info(f"[Task {uid}] 按请求保持原始采样率，不做重采样")
+        else:
+            # 如果采样率低于 16kHz，进行重采样（API 要求的最低采样率）
+            if original_sr < 16000:
+                logger.info(f"[Task {uid}] 采样率低于 16kHz，进行重采样...")
+                audio = audio.set_frame_rate(16000)
+                logger.info(f"[Task {uid}] 重采样后: {audio.frame_rate}Hz")
 
         # 保存处理后的音频
         processed_path = f"{temp_audio_path}_processed.wav"
@@ -2203,7 +2212,8 @@ def generate_training_db(request: GenerateTrainingDataRequest):
             audio_url=request.audio_url,
             voice_prefix=request.voice_prefix,
             target_duration_min=request.target_duration_min,
-            output_dir=output_dir
+            output_dir=output_dir,
+            keep_sr=request.keep_sr,
         )
 
         # 启动后台线程执行任务
@@ -2215,7 +2225,8 @@ def generate_training_db(request: GenerateTrainingDataRequest):
                 request.audio_url,
                 request.voice_prefix,
                 request.target_duration_min,
-                output_dir
+                output_dir,
+                request.keep_sr,
             )
         )
         thread.daemon = True

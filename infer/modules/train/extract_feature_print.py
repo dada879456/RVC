@@ -24,6 +24,23 @@ import soundfile as sf
 import torch
 import torch.nn.functional as F
 
+# PyTorch 2.6+ 之后，torch.load 默认开启 weights_only=True。
+# fairseq 的 hubert_base.pt 里除了权重还有其它 Python 对象（如 Dictionary），
+# 使用 weights_only=True 会直接在这里报错。
+_orig_torch_load = torch.load
+
+
+def _torch_load_weights_full(*args, **kwargs):
+    """
+    在本脚本范围内强制使用 weights_only=False。
+    仅用于加载我们自己信任来源的 hubert_base.pt。
+    """
+    kwargs["weights_only"] = False
+    return _orig_torch_load(*args, **kwargs)
+
+
+torch.load = _torch_load_weights_full
+
 if "privateuseone" not in device:
     device = "cpu"
     if torch.cuda.is_available():

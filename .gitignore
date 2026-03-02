@@ -26,3 +26,10 @@ rmvpe.pt
 /assets/weights/*
 ffmpeg.*
 ffprobe.*
+
+# Local training data and audio segments (do not upload)
+/training_data/
+/zhulin-isolated_segments/
+
+# Do not track any mp3 audio files
+*.mp3
