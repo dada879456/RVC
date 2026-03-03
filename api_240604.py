@@ -677,6 +677,20 @@ class RvcConvertRequest(BaseModel):
     oss_region: str = "cn-beijing"  # OSS Region
 
 
+class RvcSimpleConvertRequest(BaseModel):
+    """不带背景音乐混合的简单转换请求"""
+    input_url: str  # 音频URL
+    model_name: str = "/home/RVC/assets/weights/lulu_e120_s23040.pth"  # 模型路径
+    f0method: str = "rmvpe"  # 基频检测方法
+    pitch: int = 0
+    index_rate: float = 0.7  # 检索强度
+    index_path: str = ""  # 可选：index文件路径
+    # OSS 配置（可选，使用环境变量默认值）
+    oss_bucket: str = "998555"  # OSS Bucket
+    oss_endpoint: str = "oss-cn-beijing.aliyuncs.com"  # OSS Endpoint (华北2北京)
+    oss_region: str = "cn-beijing"  # OSS Region
+
+
 class GenerateTrainingDataRequest(BaseModel):
     """生成训练数据库请求"""
     user_id: str = ""  # 用户ID
@@ -2168,6 +2182,28 @@ def convert_url(request: RvcConvertRequest):
     except Exception as e:
         logger.error(f"转换失败: {e}")
         raise HTTPException(status_code=500, detail=f"转换失败: {str(e)}")
+
+
+@app.post("/convert/url/simple")
+def convert_url_simple(request: RvcSimpleConvertRequest):
+    """
+    简化版接口：仅根据 input_url 进行 RVC 转换，不进行背景音乐混合
+    其余逻辑与 /convert/url 保持一致
+    """
+    # 复用现有的 convert_url 逻辑，只是强制不传 mix_audio_url
+    full_request = RvcConvertRequest(
+        input_url=request.input_url,
+        model_name=request.model_name,
+        f0method=request.f0method,
+        pitch=request.pitch,
+        index_rate=request.index_rate,
+        index_path=request.index_path,
+        mix_audio_url="",  # 不混合背景音乐
+        oss_bucket=request.oss_bucket,
+        oss_endpoint=request.oss_endpoint,
+        oss_region=request.oss_region,
+    )
+    return convert_url(full_request)
 
 
 @app.post("/train/generate")
